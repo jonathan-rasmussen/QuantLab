@@ -1,9 +1,11 @@
 import pandas as pd
+import numpy as np
 from tqdm import tqdm
 
 
-class Engine():
-    """The engine is the main object that will be used to run our backtest.
+class Engine:
+    """
+    The engine is the main object that will be used to run our backtest.
     """
 
     def __init__(self, initial_cash = 100_000):
@@ -11,6 +13,8 @@ class Engine():
         self.data = None
         self.initial_cash = initial_cash
         self.cash = initial_cash
+        self.cash_series = {}
+        self.stock_series = {}
         self.current_idx = None
 
     def add_data(self, data):
@@ -36,7 +40,10 @@ class Engine():
 
             # Run strategy on current bar
             self.strategy.on_bar()
-            print(idx)
+
+            # Record asset classes for AUM
+            self.cash_series[idx] = self.cash
+            self.stock_series[idx] = self.strategy.position_size * self.data.loc[self.current_idx]['Close']
 
     def _fill_orders(self):
         # Fill orders
@@ -50,23 +57,53 @@ class Engine():
         """
 
         for order in self.strategy.orders:
+
+            # set fill price to open price, holds true for market orders
+            fill_price = self.data.loc[self.current_idx]['Open']
             can_fill = False
-            order_price = self.data.loc[self.current_idx]['Open']
-            order_value = order_price * order.size
+
+            # order_price = self.data.loc[self.current_idx]['Open']
+            order_value = fill_price * order.size
 
             # Ensure cash balance greater than order for buy
             if order.side == 'buy' and self.cash >= order_value:
-                can_fill = True
+                if order.type == "limit":
+                    if order.limit_price >= self.data.loc[self.current_idx]['Low']:
+                        fill_price = order.limit_price
+                        can_fill = True
+                        print(self.current_idx,
+                              'Buy Filled. ',
+                              "limit",
+                              order.limit_price,
+                              " / low",
+                              self.data.loc[self.current_idx]['Low'])
+
+                    else:
+                        print(self.current_idx, "Buy NOT Filled", "limit", order.limit_price, " / low",
+                              self.data.loc[self.current_idx]['Low'])
+                else:
+                    can_fill = True
 
             # Ensure position greater than order for sell
             elif order.side == 'sell' and self.strategy.position_size >= order.size:
-                can_fill = True
+
+                if order.type == "limit":
+                    if order.limit_price <= self.data.loc[self.current_idx]['High']:
+                        fill_price = order.limit_price
+                        can_fill = True
+                        print(self.current_idx, 'Sell Filled. ', "limit", order.limit_price, " / high",
+                              self.data.loc[self.current_idx]['High'])
+                    else:
+                        print(self.current_idx, "Sell NOT Filled")
+                else:
+                    can_fill = True
+
 
             if can_fill:
                 trade = Trade(
                     ticker = order.ticker,
                     side = order.side,
-                    price = order_price,
+                    price = fill_price,
                     size = order.size,
                     type = order.type,
                     idx = self.current_idx
@@ -78,15 +115,19 @@ class Engine():
 
     def _get_stats(self):
         metrics = {}
-        final_portfolio_value = ((self.data.loc[self.current_idx]['Close'] * self.strategy.position_size + self.cash))
+
+        # Total Return
+        final_portfolio_value = (self.data.loc[self.current_idx]['Close'] * self.strategy.position_size + self.cash)
         total_return = (final_portfolio_value/ self.initial_cash - 1) * 100
         metrics['total_return'] = total_return
+
         return metrics
 
 
 
-class Strategy():
-    """This base class will handle the execution logic of our trading strategies
+class Strategy:
+    """
+    This base class will handle the execution logic of the strategies
     """
 
     def __init__(self):
@@ -115,9 +156,38 @@ class Strategy():
             )
         )
 
+
+    def buy_limit(self, ticker, limit_price, size = 1):
+        self.orders.append(
+            Order(
+                ticker = ticker,
+                side = 'buy',
+                limit_price = limit_price,
+                size = size,
+                order_type = 'limit',
+                idx = self.current_idx
+            )
+        )
+
+    def sell_limit(self, ticker, limit_price, size = 1):
+        self.orders.append(
+            Order(
+                ticker = ticker,
+                side = 'sell',
+                limit_price = limit_price,
+                size = -size,
+                order_type = 'limit',
+                idx = self.current_idx
+            )
+        )
+
     @property
     def position_size(self):
         return sum([trade.size for trade in self.trades])
+
+    @property
+    def close(self):
+        return self.data.loc[self.current_idx]['Close']
 
     def on_bar(self):
         """
@@ -126,8 +196,9 @@ class Strategy():
         pass
 
 
-class Trade():
-    """Trade objects are created when an order is filled.
+class Trade:
+    """
+    Trade objects are created when an order is filled.
     """
 
     def __init__(self, ticker, side, size, price, type, idx):
@@ -142,13 +213,15 @@ class Trade():
         return f'<Trade: {self.idx} {self.ticker} {self.side} {self.size}@{self.price}>'
 
 
-class Order():
-    """When buying or selling, we first create an order object. If the order is filled, we create a trade object.
+class Order:
+    """
+    When buying or selling, create an order object. If the order is filled, create a trade object.
     """
 
-    def __init__(self, ticker, size, side, idx):
+    def __init__(self, ticker, size, side, idx, limit_price = None, order_type = "market"):
         self.ticker = ticker
         self.side = side
         self.size = size
-        self.type = "market"
+        self.limit_price = limit_price
+        self.type = order_type
         self.idx = idx
