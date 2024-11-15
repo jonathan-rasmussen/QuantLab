@@ -1,4 +1,7 @@
 import pandas as pd
+import seaborn as sns
+import matplotlib.pyplot as plt
+plt.rcParams['figure.figsize'] = [12, 6]
 import numpy as np
 from tqdm import tqdm
 
@@ -16,6 +19,8 @@ class Engine:
         self.cash_series = {}
         self.stock_series = {}
         self.current_idx = None
+        self.trading_days = 252
+        self.risk_free_rate = 0
 
     def add_data(self, data):
         # add ticker OHLC data to engine
@@ -29,6 +34,8 @@ class Engine:
 
         # map data to strategy
         self.strategy.data = self.data
+        self.strategy.cash = self.cash
+
 
         for idx in tqdm(self.data.index):
 
@@ -44,6 +51,7 @@ class Engine:
             # Record asset classes for AUM
             self.cash_series[idx] = self.cash
             self.stock_series[idx] = self.strategy.position_size * self.data.loc[self.current_idx]['Close']
+        return self._get_stats()
 
     def _fill_orders(self):
         # Fill orders
@@ -71,16 +79,7 @@ class Engine:
                     if order.limit_price >= self.data.loc[self.current_idx]['Low']:
                         fill_price = order.limit_price
                         can_fill = True
-                        print(self.current_idx,
-                              'Buy Filled. ',
-                              "limit",
-                              order.limit_price,
-                              " / low",
-                              self.data.loc[self.current_idx]['Low'])
 
-                    else:
-                        print(self.current_idx, "Buy NOT Filled", "limit", order.limit_price, " / low",
-                              self.data.loc[self.current_idx]['Low'])
                 else:
                     can_fill = True
 
@@ -91,13 +90,8 @@ class Engine:
                     if order.limit_price <= self.data.loc[self.current_idx]['High']:
                         fill_price = order.limit_price
                         can_fill = True
-                        print(self.current_idx, 'Sell Filled. ', "limit", order.limit_price, " / high",
-                              self.data.loc[self.current_idx]['High'])
-                    else:
-                        print(self.current_idx, "Sell NOT Filled")
                 else:
                     can_fill = True
-
 
             if can_fill:
                 trade = Trade(
@@ -114,6 +108,7 @@ class Engine:
 
 
     def _get_stats(self):
+
         metrics = {}
 
         # Total Return
@@ -121,7 +116,54 @@ class Engine:
         total_return = (final_portfolio_value/ self.initial_cash - 1) * 100
         metrics['total_return'] = total_return
 
+        # Buy & Hold Benchmark
+        portfolio_bh_qty = self.initial_cash / self.data.loc[self.data.index[0]]['Open']
+        portfolio_bh = portfolio_bh_qty * self.data.Close
+
+        # Exposure to Asset
+        portfolio = pd.DataFrame({'stock':self.stock_series,
+                                  'cash':self.cash_series})
+        portfolio['total_aum'] = portfolio['stock'] + portfolio['cash']
+        metrics['exposure_pct'] = ((portfolio['stock'] / portfolio['total_aum']) * 100).mean()
+
+        # Annualized Returns
+        p = portfolio.total_aum
+        metrics['returns_annualized'] = ((p.iloc[-1] / p.iloc[0]) ** (1 / ((p.index[-1] - p.index[0]).days / 365)) - 1) * 100
+
+        p_bh = portfolio_bh
+        metrics['returns_bh_annualized'] = ((p_bh.iloc[-1] / p_bh.iloc[0]) ** (1 / ((p_bh.index[-1] - p_bh.index[0]).days / 365)) - 1) * 100
+
+        # Annualized Volatility
+        metrics['volatility_ann'] = p.pct_change().std() * np.sqrt(self.trading_days) * 100
+        metrics['volatility_bh_ann'] = p_bh.pct_change().std() * np.sqrt(self.trading_days) * 100
+
+        # Sharpe Ratio
+        metrics['sharpe_ratio'] = (metrics['returns_annualized'] - self.risk_free_rate) / metrics['volatility_ann']
+        metrics['sharpe_ratio_bh'] = (metrics['returns_bh_annualized'] - self.risk_free_rate) / metrics['volatility_bh_ann']
+
+
+        # Save for plotting
+        self.portfolio = portfolio
+        self.portfolio_bh = portfolio_bh
+
+        # Max Drawdown
+        metrics['max_drawdown'] = self.get_max_drawdown(portfolio.total_aum)
+        metrics['max_drawdown_bh'] = self.get_max_drawdown(portfolio_bh)
+
         return metrics
+
+    def get_max_drawdown(self, close):
+        roll_max = close.cummax()
+        daily_drawdown = close / roll_max - 1
+        max_daily_drawdown = daily_drawdown.cummin()
+        return max_daily_drawdown.min() * 100
+
+
+    def plot(self):
+        plt.plot(self.portfolio["total_aum"], label = "Strategy")
+        plt.plot(self.portfolio_bh, label = "Buy & Hold")
+        plt.legend()
+        plt.show()
 
 
 
@@ -133,6 +175,7 @@ class Strategy:
     def __init__(self):
         self.current_idx = None
         self.data = None
+        self.cash = None
         self.orders = []
         self.trades = []
 
