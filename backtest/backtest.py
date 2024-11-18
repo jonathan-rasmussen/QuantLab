@@ -34,10 +34,10 @@ class Engine:
 
         # map data to strategy
         self.strategy.data = self.data
-        self.strategy.cash = self.cash
 
 
         for idx in tqdm(self.data.index):
+            self.strategy.cash = self.cash
 
             self.current_idx = idx
             self.strategy.current_idx = self.current_idx
@@ -51,6 +51,7 @@ class Engine:
             # Record asset classes for AUM
             self.cash_series[idx] = self.cash
             self.stock_series[idx] = self.strategy.position_size * self.data.loc[self.current_idx]['Close']
+            print(f"AUM: {self.cash_series[idx] + self.stock_series[idx]}, cash: {self.cash_series[idx]}, stock: {self.stock_series[idx]}")
         return self._get_stats()
 
     def _fill_orders(self):
@@ -102,8 +103,12 @@ class Engine:
                     type = order.type,
                     idx = self.current_idx
                 )
+
+                print(trade.__repr__())
+
                 self.strategy.trades.append(trade)
                 self.cash -= trade.price * trade.size
+                self.strategy.cash = self.cash
         self.strategy.orders = []
 
 
