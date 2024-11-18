@@ -7,7 +7,16 @@ import time
 import pandas as pd
 from techAnalysis import TechnicalAnalysis
 from orderManager import OrderManager
+import configparser
 
+# Read configuration
+config = configparser.ConfigParser()
+config.read("config.txt")
+
+# Access values
+host = config["CONNECTION"]["HOST"]
+port = int(config["CONNECTION"]["PORT"])
+client_id = int(config["CONNECTION"]["ID"])
 
 pd.set_option('display.max_rows', None)
 pd.set_option('display.max_columns', None)
@@ -100,7 +109,7 @@ class IBConnection(EWrapper, EClient):
 
 def main():
     IBConnect = IBConnection()
-    IBConnect.connect("127.0.0.1", 7497, 0)
+    IBConnect.connect(host, port, client_id)
 
     # Recieve delayed market data due to none-subscription
     IBConnect.reqMarketDataType(3)
